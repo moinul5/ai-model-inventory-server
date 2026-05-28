@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const admin = require("firebase-admin");
 require("dotenv").config();
 
@@ -8,7 +8,7 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 //firebase
-const serviceAccount = require("./smart-dealsfirebase-adminsdk.json");
+const serviceAccount = require("./ai-inventory-system-1-firebase-adminsdk.json");
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
@@ -18,10 +18,10 @@ app.use(cors());
 app.use(express.json());
 
 const verifyWithFirebase = async (req, res, next) => {
-  if (!req.headers.authroization)
+  if (!req.headers.authorization)
     return res.status(401).send({ message: "unauthorized access" });
 
-  const authToken = req.headers.authroization.split(" ")[1];
+  const authToken = req.headers.authorization.split(" ")[1];
   if (!authToken)
     return res.status(401).send({ message: "unauthorized access" });
 
@@ -50,6 +50,7 @@ async function run() {
     await client.connect();
     const db = client.db("aiInventoryDB");
     const modelCollection = db.collection("models");
+    const purchaseInfoCollection = db.collection("purchase_info");
 
     // get all models
     app.get("/models", async (req, res) => {
@@ -77,50 +78,94 @@ async function run() {
     });
 
     //get single model data
-    app.get("/model/:id", verifyWithFirebase, async (req, res) => {
+    app.get("/model/:id",verifyWithFirebase, async (req, res) => {
       const id = req.params.id;
       const result = await modelCollection.findOne({ _id: new ObjectId(id) });
       res.send(result);
     });
 
     // purchase a model
-    app.post("/purchase/:id", verifyWithFirebase, async (req, res) => {
-      const id = req.params.id;
+app.post("/purchase/:id", verifyWithFirebase, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const user = req.token_email; 
 
-      const filter = { _id: new ObjectId(id) };
+    const filter = { _id: new ObjectId(id) };
 
-      const updateDoc = {
-        $inc: { purchased: 1 },
-      };
-
-      const result = await modelCollection.updateOne(filter, updateDoc);
-
-      if (result.modifiedCount > 0) {
-        res.send({
-          message: "Model purchased successfully",
-        });
-      } else {
-        res.status(404).send({
-          message: "Model not found",
-        });
+    // 1. Increase purchase count
+    const updateResult = await modelCollection.updateOne(
+      filter,
+      {
+        $inc: { purchased: 1 }
       }
+    );
+
+    if (updateResult.modifiedCount === 0) {
+      return res.status(404).send({
+        message: "Model not found"
+      });
+    }
+
+    // 2. Add purchase history
+    const purchaseData = {
+      modelId: new ObjectId(id),
+      buyerEmail: user,
+      purchasedAt: new Date()
+    };
+
+    await purchaseInfoCollection.insertOne(purchaseData);
+
+    return res.send({
+      success: true,
+      message: "Model purchased successfully"
     });
+
+  } catch (error) {
+    console.log(error);
+
+    return res.status(500).send({
+      message: "Purchase failed"
+    });
+  }
+});
 
     // get my model
     app.get("/my-models", verifyWithFirebase, async (req, res) => {
       const email = req.query.email;
-      if (email != token_email)
+      if (email != req.token_email)
         return res.status(403).send({ message: "forbidden access" });
       const result = await modelCollection
-        .find({ createdBy: token_email })
+        .find({ createdBy: req.token_email })
         .toArray();
       res.send(result);
     });
 
+    // get my purchases
+    app.get("/my-purchases", verifyWithFirebase, async (req, res) => {
+      const email = req.query.email;
+      if (email != req.token_email)
+        return res.status(403).send({ message: "forbidden access" });
+
+
+      const result = await purchaseInfoCollection
+        .find({ buyerEmail: req.token_email }).aggregate([
+          {
+            $lookup: {
+              from: "models",
+              localField: "modelId",
+              foreignField: "_id",
+              as: "modelInfo"
+            }
+          }
+        ]).toArray();
+      res.send(result);
+    });
+
+
     // add a model
     app.post("/add-model", verifyWithFirebase, async (req, res) => {
       const modelData = req.body;
-      if (modelData.createdBy != token_email)
+      if (modelData.createdBy != req.token_email)
         return res.status(403).send({ message: "forbidden access" });
       const result = await modelCollection.insertOne(modelData);
       res.send(result);
@@ -129,7 +174,7 @@ async function run() {
     // delete a model
     app.delete("/model/:id", verifyWithFirebase, async (req, res) => {
       const id = req.params.id;
-      const filter = { _id: new ObjectId(id), createdBy: token_email };
+      const filter = { _id: new ObjectId(id), createdBy: req.token_email };
       const result = await modelCollection.deleteOne(filter);
       res.send(result);
     });
@@ -138,9 +183,9 @@ async function run() {
     app.put("/model/:id", verifyWithFirebase, async (req, res) => {
       const id = req.params.id;
       const updatedData = req.body;
-      if (updatedData.createdBy != token_email)
+      if (updatedData.createdBy != req.token_email)
         return res.status(403).send({ message: "forbidden access" });
-      const filter = { _id: new ObjectId(id), createdBy: token_email };
+      const filter = { _id: new ObjectId(id), createdBy: req.token_email };
       const updateDoc = { $set: updatedData };
       const result = await modelCollection.updateOne(filter, updateDoc);
       res.send(result);
