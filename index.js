@@ -78,56 +78,52 @@ async function run() {
     });
 
     //get single model data
-    app.get("/model/:id",verifyWithFirebase, async (req, res) => {
+    app.get("/model/:id", verifyWithFirebase, async (req, res) => {
       const id = req.params.id;
       const result = await modelCollection.findOne({ _id: new ObjectId(id) });
       res.send(result);
     });
 
     // purchase a model
-app.post("/purchase/:id", verifyWithFirebase, async (req, res) => {
-  try {
-    const id = req.params.id;
-    const user = req.token_email; 
+    app.post("/purchase/:id", verifyWithFirebase, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const user = req.token_email;
 
-    const filter = { _id: new ObjectId(id) };
+        const filter = { _id: new ObjectId(id) };
 
-    // 1. Increase purchase count
-    const updateResult = await modelCollection.updateOne(
-      filter,
-      {
-        $inc: { purchased: 1 }
+        // 1. Increase purchase count
+        const updateResult = await modelCollection.updateOne(filter, {
+          $inc: { purchased: 1 },
+        });
+
+        if (updateResult.modifiedCount === 0) {
+          return res.status(404).send({
+            message: "Model not found",
+          });
+        }
+
+        // 2. Add purchase history
+        const purchaseData = {
+          modelId: new ObjectId(id),
+          buyerEmail: user,
+          purchasedAt: new Date(),
+        };
+
+        await purchaseInfoCollection.insertOne(purchaseData);
+
+        return res.send({
+          success: true,
+          message: "Model purchased successfully",
+        });
+      } catch (error) {
+        console.log(error);
+
+        return res.status(500).send({
+          message: "Purchase failed",
+        });
       }
-    );
-
-    if (updateResult.modifiedCount === 0) {
-      return res.status(404).send({
-        message: "Model not found"
-      });
-    }
-
-    // 2. Add purchase history
-    const purchaseData = {
-      modelId: new ObjectId(id),
-      buyerEmail: user,
-      purchasedAt: new Date()
-    };
-
-    await purchaseInfoCollection.insertOne(purchaseData);
-
-    return res.send({
-      success: true,
-      message: "Model purchased successfully"
     });
-
-  } catch (error) {
-    console.log(error);
-
-    return res.status(500).send({
-      message: "Purchase failed"
-    });
-  }
-});
 
     // get my model
     app.get("/my-models", verifyWithFirebase, async (req, res) => {
@@ -143,24 +139,34 @@ app.post("/purchase/:id", verifyWithFirebase, async (req, res) => {
     // get my purchases
     app.get("/my-purchases", verifyWithFirebase, async (req, res) => {
       const email = req.query.email;
-      if (email != req.token_email)
-        return res.status(403).send({ message: "forbidden access" });
 
+      if (email !== req.token_email) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
 
       const result = await purchaseInfoCollection
-        .find({ buyerEmail: req.token_email }).aggregate([
+        .aggregate([
+          {
+            $match: {
+              buyerEmail: req.token_email,
+            },
+          },
           {
             $lookup: {
               from: "models",
               localField: "modelId",
               foreignField: "_id",
-              as: "modelInfo"
-            }
-          }
-        ]).toArray();
+              as: "modelInfo",
+            },
+          },
+          {
+            $unwind: "$modelInfo",
+          },
+        ])
+        .toArray();
+
       res.send(result);
     });
-
 
     // add a model
     app.post("/add-model", verifyWithFirebase, async (req, res) => {
@@ -168,6 +174,23 @@ app.post("/purchase/:id", verifyWithFirebase, async (req, res) => {
       if (modelData.createdBy != req.token_email)
         return res.status(403).send({ message: "forbidden access" });
       const result = await modelCollection.insertOne(modelData);
+      res.send(result);
+    });
+
+    // update a model
+    app.patch("/update-model/:id", verifyWithFirebase, async (req, res) => {
+      const id = req.params.id;
+
+      const filter = {
+        _id: new ObjectId(id),
+      };
+
+      const updateDoc = {
+        $set: req.body,
+      };
+
+      const result = await modelCollection.updateOne(filter, updateDoc);
+
       res.send(result);
     });
 
