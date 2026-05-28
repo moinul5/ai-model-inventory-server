@@ -8,7 +8,12 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 //firebase
-const serviceAccount = require("./ai-inventory-system-1-firebase-adminsdk.json");
+const serviceAccount = {
+  projectId: process.env.FIREBASE_PROJECT_ID,
+  clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+  privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+};
+
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
